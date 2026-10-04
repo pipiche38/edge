@@ -953,12 +953,15 @@ Future<OuraPairAttempt> ouraPairHandshake(
     // The key install only when the key is OURS. A key the ring already holds
     // needs nothing but the proof below.
     if (install) {
+      debugPrint('[oura pair] writing the key-install command');
       if (!await link.write(kOuraCommandChar, ouraCmdSetAuthKey(key))) {
         return const OuraPairAttempt.failed(
             'The ring would not accept a command. Try again with it on '
             'the charger and next to the phone.');
       }
       final installed = await waitFor((f) => ouraSetAuthKeyResult(f) != null);
+      debugPrint('[oura pair] key-install result: '
+          '${installed == null ? "no answer" : ouraSetAuthKeyResult(installed)}');
       // SILENCE IS A REFUSAL, NOT CONSENT. A ring that already holds a key is
       // the case that matters here and it does not necessarily answer at all —
       // and carrying on to mint a `device` row on the strength of a quiet ring
@@ -968,6 +971,7 @@ Future<OuraPairAttempt> ouraPairHandshake(
       }
       onKeyInstalled?.call();
     }
+    debugPrint('[oura pair] requesting a nonce');
     if (!await link.write(kOuraCommandChar, ouraCmdAuthNonce())) {
       return const OuraPairAttempt.failed(
           'The ring would not accept a command. Try again with it on '
@@ -979,6 +983,10 @@ Future<OuraPairAttempt> ouraPairHandshake(
           'The ring stopped answering part-way through pairing. Put it on '
           'the charger, keep it next to the phone, and try again.');
     }
+    // The nonce's LENGTH, not the nonce, and never the answer — that is the
+    // key under AES and printing it would put the secret in the log by proxy.
+    debugPrint('[oura pair] nonce received (${ouraAuthNonce(challenge)!.length} '
+        'bytes); answering with the ${key.length}-byte key');
     final answer = ouraAuthResponse(key, ouraAuthNonce(challenge)!);
     if (!await link.write(kOuraCommandChar, ouraCmdAuthenticate(answer))) {
       return const OuraPairAttempt.failed(
@@ -997,6 +1005,9 @@ Future<OuraPairAttempt> ouraPairHandshake(
     // belongs to something else, and only a reset frees it. On the
     // existing-key path a reset is the one thing NOT to suggest.
     final result = ouraAuthResult(replyFrame);
+    debugPrint('[oura pair] auth result: $result '
+        '(0 = accepted; on the existing-key path anything else means the ring '
+        'does not hold this key)');
     if (result == 0) return const OuraPairAttempt.accepted();
     // On the install path every branch below is `rejected`: the ring answered
     // the challenge, so it is a verdict on this key. On the existing-key path
@@ -1176,8 +1187,10 @@ Future<String?> _pairOuraRing(
             if (!await _awaitAdapterOn()) {
               return 'Bluetooth is off. Turn it on and try again.';
             }
+            debugPrint('[oura pair] connecting to ${device.remoteId.str}');
             await device.connect(timeout: const Duration(seconds: 20));
             final services = await device.discoverServices();
+            debugPrint('[oura pair] ${services.length} service(s) discovered');
             final localLink = GattBandLink(
               entry: kOura,
               services: services,
